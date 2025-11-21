@@ -42,14 +42,43 @@ export function openPaymentModal() {
 }
 
 /**
- * [优惠卡购买] 限制支付方式
+ * [B1-PASS-REVIEW-AND-PAYMENT-MINI] 限制支付方式
+ *
+ * 支付方式限制适用于以下场景：
+ *
+ * 场景 A：购买优惠卡/次卡 (STATE.purchasingDiscountCard === true)
+ * - 只允许现金 / 银行卡
+ *
+ * 场景 B：次卡核销有加价 (STATE.activePassSession !== null 且 extra_charge_total > 0)
+ * - 只允许现金 / 银行卡
+ * - 理由：次卡核销的加价部分需要强制使用现金/银行卡支付，防止合规风险
+ *
+ * 场景 C：次卡核销 0 元加价 (STATE.activePassSession !== null 且 extra_charge_total = 0)
+ * - B1 阶段保持现有行为：不限制支付方式
+ * - 虽然 0 元核销实际上不需要支付，但现有实现仍会弹出支付方式选择
+ * - 未来优化：可以在此处添加"核销确认弹窗"替代支付流程（但不属于本 B1 任务范围）
+ *
+ * 其他场景：普通订单
+ * - 显示所有支付方式（Bizum 除外，因为尚未集成）
  */
 function restrictPaymentMethods() {
     const methodSelector = $('#payment_method_selector');
     if (!methodSelector.length) return;
 
-    if (STATE.purchasingDiscountCard) {
-        // 优惠卡购买模式：只显示现金和银行卡
+    // 判断是否需要限制支付方式
+    const isDiscountCardPurchase = STATE.purchasingDiscountCard !== null;
+
+    // [B1-MINI] 判断是否为次卡核销有加价场景
+    // extra_charge_total 存储在 STATE.calculatedCart.final_total 中（由 calculatePassRedemptionTotals 计算）
+    const isPassRedemptionWithCharge = STATE.activePassSession !== null
+                                       && STATE.calculatedCart
+                                       && (parseFloat(STATE.calculatedCart.final_total) || 0) > 0;
+
+    // 需要限制支付方式的场景：优惠卡购买 或 次卡核销有加价
+    const shouldRestrictPaymentMethods = isDiscountCardPurchase || isPassRedemptionWithCharge;
+
+    if (shouldRestrictPaymentMethods) {
+        // 限制模式：只显示现金和银行卡
         methodSelector.find('[data-pay-method]').each(function() {
             const method = $(this).data('pay-method');
             if (method === 'Cash' || method === 'Card') {
@@ -62,7 +91,7 @@ function restrictPaymentMethods() {
         // 普通模式：显示所有支付方式
         methodSelector.find('[data-pay-method]').each(function() {
             const method = $(this).data('pay-method');
-            // Bizum 保持禁用
+            // Bizum 保持禁用（尚未集成）
             if (method === 'Bizum') {
                 $(this).prop('disabled', true);
             } else {
@@ -310,24 +339,12 @@ export async function submitOrder() {
             // --- Flow A: Discount Card Purchase (ONLY valid pass purchase flow) ---
             const card = STATE.purchasingDiscountCard;
 
-            // [POS-PASS-I18N-NAME-MINI] 获取多语言名称（与 discountCard.js 逻辑一致）
-            let cardName;
-            if (STATE.lang === 'es') {
-                cardName = (card.name_es && card.name_es.trim()) ||
-                          (card.name_zh && card.name_zh.trim()) ||
-                          card.name || '';
-            } else {
-                cardName = (card.name_zh && card.name_zh.trim()) ||
-                          card.name ||
-                          (card.name_es && card.name_es.trim()) || '';
-            }
-
             const purchaseData = {
                 member_id: card.member_id,
                 secondary_phone_input: card.secondary_phone_input, // 二次验证的手机号
                 cart_item: {
                     sku: card.sale_sku,
-                    name: cardName,
+                    name: card.name_zh || card.name,
                     qty: 1,
                     price: parseFloat(card.sale_price || 0),
                     total: parseFloat(card.sale_price || 0)
