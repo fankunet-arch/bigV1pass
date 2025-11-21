@@ -1,0 +1,119 @@
+CPSYS-B1-PASS-REVIEW-AND-PAYMENT-MINI 审计与设计报告
+1. 现状审计：次卡售卡审核链路
+1.1 数据模型现状
+  •pass_plans 表: 包含 auto_activate (tinyint) 字段。目前代码中，CPSYS 保存方案时已正确写入此字段（参考 cpsys_registry_bms_pass_plan.php）。
+  •topup_orders 表: 包含 review_status (enum: pending, confirmed, rejected, refunded)。
+  •member_passes 表:
+ostatus 字段枚举为 enum('active','suspended','revoked','expired')。
+o关键发现: 该枚举中不包含 pending 状态。这意味着目前无法直接在数据库层面用 status 字段明确表示“待审核”。
+  •关联性: topup_orders 与 member_passes 通过 topup_order_id 关联。
+1.2 代码逻辑现状 (PoS 售卡)
+  •文件: store_html/pos_backend/helpers/pos_pass_helper.php -> create_pass_records()
+  •逻辑:
+PHP
+$sql_insert = "INSERT INTo member_passes (..., status, ...) VALUES (..., 'active', ...)";
+o问题: 代码硬编码了 'active' 状态。无论 pass_plans.auto_activate 是 0 还是 1，新生成的次卡立即处于 active 状态。
+o这解释了为何“未审核也能核销”：卡片一生成就是激活的。
+1.3 代码逻辑现状 (CPSYS 审核)
+  •文件: hq_html/html/cpsys/api/registries/cpsys_registry_bms_member.php -> handle_topup_order_review()
+  •文件: hq_html/app/helpers/kds/kds_repo_c.php -> activate_member_pass()
+  •逻辑:
+o点击“通过”时，调用 activate_member_pass。
+o该函数执行 INSERT ... oN DUPLICATE KEY UPDATE ... status = 'active'。
+o现状: 由于 PoS 售卡时已经是 active，这个操作实际上只更新了 topup_orders.review_status 为 confirmed，对 member_passes 的可用性没有实质改变（它本来就是 active）。
+1.4 代码逻辑现状 (PoS 核销)
+  •文件: store_html/pos_backend/helpers/pos_repo_ext_pass.php -> get_member_pass_for_update()
+  •逻辑:
+SQL
+WHERE mp.status = 'active' AND ...
+o确认: 核销接口只认 status = 'active' 的卡。
+o结论: 如果我们能让未审核的卡处于非 active 状态（如 suspended），就能利用现有逻辑拦截核销。
+________________________________________
+2. 现状审计：次卡核销支付渠道
+2.1 前端支付列表 (PoS)
+  •文件: store_html/html/pos/assets/js/modules/payment.js
+  •函数: openPaymentModal / restrictPaymentMethods
+  •逻辑:
+o目前代码中有一个 restrictPaymentMethods() 函数。
+o它仅检查了 STATE.purchasingDiscountCard（是否在购买优惠卡）。如果是，则只允许 Cash/Card。
+o缺失: 它没有检查 STATE.activePassSession（是否在核销次卡）。
+o因此，在次卡核销且有加价时，前端展示了所有支付方式（Cash, Card, Bizum, Platform）。
+2.2 后端支付校验 (PoS)
+  •文件: store_html/html/pos/api/registries/pos_registry_ext_pass.php -> handle_pass_redeem()
+  •文件: store_html/pos_backend/helpers/pos_pass_helper.php -> create_redeem_records()
+  •逻辑:
+o代码会解析 payment 数组来校验总金额是否足够。
+o缺失: 没有任何逻辑检查 payment_summary 中的 method 字段是否在白名单内。
+o只要金额对，Bizum 或 平台码（Platform）都能通过核销接口。
+________________________________________
+3. 问题总结
+1.审核形同虚设: pos_pass_helper.php 在创建次卡时无视 auto_activate 配置，直接硬编码为 active。因为 member_passes.status 枚举中缺少 pending，开发人员当时可能为了省事直接用了 active。
+2.核销支付无管控: 核销加价场景（Extra Charge > 0）在前端未复用“支付方式限制逻辑”，后端也完全未做白名单校验。
+________________________________________
+4. 修复设计建议 (最小改动)
+4.1 次卡售卡审核机制设计
+目标: 利用现有字段 pass_plans.auto_activate 和 member_passes.status 实现审核阻断。
+策略: 借用 member_passes.status = 'suspended' 来表示“待审核/未激活”。
+  •理由: 数据库 enum 不支持 pending，且禁止修改 Schema。suspended (挂起) 从语义上最接近“暂时不可用，待处理”。
+设计细节:
+1.PoS 售卡 (pos_pass_helper.php -> create_pass_records):
+o读取 plan_details['auto_activate']。
+oIF auto_activate == 1: 插入/更新 member_passes 时，设置 status = 'active' (保持现状)。
+oIF auto_activate == 0: 插入/更新 member_passes 时，设置 status = 'suspended'。
+o注意: 叠加购买场景下，如果原卡是 active，新买的这部分需要审核怎么办？
+简化策略 (B1阶段): 叠加购买时，如果卡已经是 active，则不再回退到 suspended（视为老用户信任/或技术简化）。如果必须严格审核，则叠加购买应强制将状态置为 suspended，直到审核通过（但这会锁死用户剩余的所有次数）。
+推荐: 首次购买 (INSERT) 时严格遵循 auto_activate。叠加购买 (UPDATE) 时，若 auto_activate=0，不改变当前状态（如果已激活则继续激活），或者强制 suspended。
+B1 决策: 为降低复杂度，仅在 INSERT (新卡) 时应用 suspended 逻辑。Update 时保持原状态。这样能堵住大部分“新开卡未审核”的漏洞。
+2.CPSYS 审核 (kds_repo_c.php -> activate_member_pass):
+o现有逻辑 INSERT ... oN DUPLICATE KEY UPDATE ... status = 'active' 已经完美支持。
+o当管理员点击“通过”时，无论当前是 suspended 还是什么，都会被强制更新为 active。
+o无需修改后端审核逻辑，只需确保 PoS 写入了正确的初始状态。
+3.PoS 核销 (pos_repo_ext_pass.php):
+oget_member_pass_for_update 已经包含 WHERE status = 'active'。
+o自动生效: 一旦卡片状态为 suspended，核销查询直接返回空/找不到，从而阻止核销。
+4.2 次卡核销支付渠道白名单设计
+目标: 核销加价时，仅允许 Cash / Card。
+设计细节:
+1.前端 (payment.js -> openPaymentModal):
+o修改 restrictPaymentMethods 函数（或重命名为 applyPaymentMethodRules）。
+o新增判断条件: if (STATE.activePassSession !== null) (即当前处于核销模式)。
+o在此模式下，应用与 STATE.purchasingDiscountCard 相同的限制逻辑：
+启用: Cash, Card
+禁用/隐藏: Bizum, Platform, 及其它。
+2.后端 (pos_registry_ext_pass.php -> handle_pass_redeem):
+o在调用 create_redeem_records 之前，解析输入参数 payment。
+o检查 extra_charge_total (或前端传来的 total)。如果 > 0：
+遍历 payment['summary'] 或解析后的支付明细。
+如果有任何 method 不属于 ['Cash', 'Card', 'Efectivo', 'Tarjeta'] (注意大小写和多语言兼容)，抛出 400 错误。
+o建议使用 pos_repo.php 中的 extract_payment_totals 处理后的归一化数据（它会归类为 Cash/Card/Platform）。
+o校验规则: if ($payment_summary['Platform'] > 0) throw Exception(...).
+________________________________________
+5. 给后续修复工程师 (Claude) 的 ToDo 列表
+5.1 CPSYS (HQ)
+  •无需修改 PHP 代码 (复用现有的 activate_member_pass 逻辑)。
+  •可选: 在 pos_pass_plan_management.js 中，确保新建方案时 auto_activate 默认值符合业务预期（建议默认为 1，特权卡手动设为 0）。
+5.2 PoS Backend (store_html/pos_backend/)
+  •文件: helpers/pos_pass_helper.php
+o函数: create_pass_records
+o任务:
+获取 plan_details['auto_activate']。
+在 INSERT 语句中，将硬编码的 'active' 替换为变量 $initial_status。
+逻辑: $initial_status = ($plan_details['auto_activate'] == 1) ? 'active' : 'suspended';
+  •文件: html/pos/api/registries/pos_registry_ext_pass.php
+o函数: handle_pass_redeem
+o任务:
+在 calculate_redeem_allocation 计算出 extra_total 后。
+如果 extra_total > 0，检查 payment_summary。
+如果 payment_summary['Platform'] > 0 (或其他非 Cash/Card 渠道)，抛出异常 "此交易仅支持现金或银行卡支付"。
+5.3 PoS Frontend (store_html/html/pos/assets/js/)
+  •文件: modules/payment.js
+o函数: openPaymentModal 或 restrictPaymentMethods
+o任务:
+增加对 STATE.activePassSession 的检查。
+如果非空 (正在核销)，执行与 purchasingDiscountCard 相同的 UI 限制逻辑 (只显示 Cash/Card)。
+________________________________________
+6. 升级路径与兼容性
+  •老数据兼容: 现有的 active 卡片不受影响，继续可用。
+  •过渡期: 代码部署后，新售出的、配置为“需审核”的次卡将变为 suspended，直到后台审核。这符合预期。
+  •回滚: 若需回滚，只需将 create_pass_records 改回硬编码 'active'，并移除支付校验逻辑。
+

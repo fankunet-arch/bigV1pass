@@ -31,6 +31,35 @@ R1/R2：主数据模型与后台 CRUD
 B1：次卡后台（只读/审核）
    状态：⚠️ 待确认 (高风险)
    说明：需确认后台 `handle_topup_order_review` 拒绝审核时的 SQL 截断错误是否已修复。
+   【B1.1 member_passes.status 使用规范（B1 版本）】
+
+member_passes.status 字段枚举为：
+- active    ：可用状态，允许核销。
+- suspended ：挂起/暂停使用状态，B1 版本中同时承载：
+              1）“待审核/未激活”的新购次卡；
+              2）潜在的“业务冻结/风控冻结”等场景（未来扩展）。
+- revoked   ：人工撤销/作废。
+- expired   ：过期，不可用。
+
+B1 设计约定：
+1）首次购卡（INSERT）时：
+   - 若 pass_plans.auto_activate = 1 → 新卡插入时 status = 'active'；
+   - 若 pass_plans.auto_activate = 0 → 新卡插入时 status = 'suspended'（表示“待审核”）。
+
+2）叠加购买（UPDATE）时：
+   - 不强制修改 member_passes.status。
+   - 若原本为 active，则保持 active，不会因为新增一笔待审核的叠加购买而整体回退为 suspended。
+   - 理由：避免误将正在使用中的卡整体锁死；叠加购买审核策略将由后续 B2/B3 阶段细化。
+
+3）核销接口：
+   - POS 后端核销查询仅接受 status = 'active' 的记录。
+   - 利用这一点，所有处于 suspended 状态的卡在 B1 阶段自然无法被核销，实现“未审核 = 无法核销”。
+
+未来扩展预留：
+- 鉴于 suspended 同时承担“待审核”和“业务冻结”的语义，后续若需要区分冻结原因，可以考虑新增字段：
+  - member_passes.suspend_reason （示例值：'pending_review', 'risk_freeze', ...）
+- 当前 B1 阶段不新增该字段，仅在设计说明中明确预留此方案，避免未来再新增 status 枚举值导致兼容性问题。
+
 B2：指标看板
    状态：🟡 部分完成
 

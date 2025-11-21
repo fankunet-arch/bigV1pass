@@ -39,6 +39,23 @@ TopTea – 次卡 · POS 端总整理（操作流程 + 实施现状） V2
      - 幂等：`idempotency_key` 查重。
      - 分流：有加价开 TP，无加价不开。
 
+【B1 注意事项：首购 vs 叠加购买的审核行为】
+
+- 首购（首次为某会员+方案创建 member_passes 记录）：
+  - 遵守 pass_plans.auto_activate 配置：
+    - auto_activate = 1 → 直接 active，可立即核销；
+    - auto_activate = 0 → 插入为 suspended，需总部审核通过后才能使用。
+
+- 叠加购买（针对已有 member_passes 的次数追加）：
+  - B1 阶段不变更 status，保持原有状态（通常为 active）。
+  - 原因：避免因一次新叠加操作，将已有剩余次数全部锁死。
+  - 后续若要对叠加购买也引入“审核后生效”机制，需要单独开 mini 阶段设计与落地（不能直接在 B1 静默改逻辑）。
+
+- 核销：
+  - POS 只对 status = 'active' 的卡执行核销。
+  - suspended 在 B1 中统一视为“不可使用”，包含“待审核”和“业务冻结”等语义。
+
+
 三、当前代码库进度详解 (Audit Results)
 
 1）P0 售卡：✅ Done
