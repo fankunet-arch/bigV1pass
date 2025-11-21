@@ -175,23 +175,24 @@ function handle_pass_plan_save(PDO $pdo, array $config, array $input_data): void
             ':max_uses_per_day' => $plan_details['max_uses_per_day'],
             ':is_active' => $plan_details['is_active'],
             ':auto_activate' => $plan_details['auto_activate'] ?? 0, // [GEMINI HY093 FIX]
-            ':sale_sku' => $sale_sku
+            ':sale_sku' => $sale_sku,
+            ':sale_price' => (float)($sale_settings['price'] ?? 0) // [POS-CPSYS-PASS-VR-PRICE-MINI] 售价唯一真相
         ];
 
         if ($plan_id) {
             // 更新
             $plan_params[':id'] = $plan_id;
-            $sql_plan = "UPDATE pass_plans SET 
-                            name = :name, total_uses = :total_uses, validity_days = :validity_days, 
+            $sql_plan = "UPDATE pass_plans SET
+                            name = :name, total_uses = :total_uses, validity_days = :validity_days,
                             max_uses_per_order = :max_uses_per_order, max_uses_per_day = :max_uses_per_day,
-                            is_active = :is_active, auto_activate = :auto_activate, sale_sku = :sale_sku
+                            is_active = :is_active, auto_activate = :auto_activate, sale_sku = :sale_sku, sale_price = :sale_price
                          WHERE pass_plan_id = :id";
         } else {
             // 新增
-            $sql_plan = "INSERT INTO pass_plans 
-                            (name, total_uses, validity_days, max_uses_per_order, max_uses_per_day, is_active, auto_activate, sale_sku) 
-                         VALUES 
-                            (:name, :total_uses, :validity_days, :max_uses_per_order, :max_uses_per_day, :is_active, :auto_activate, :sale_sku)";
+            $sql_plan = "INSERT INTO pass_plans
+                            (name, total_uses, validity_days, max_uses_per_order, max_uses_per_day, is_active, auto_activate, sale_sku, sale_price)
+                         VALUES
+                            (:name, :total_uses, :validity_days, :max_uses_per_order, :max_uses_per_day, :is_active, :auto_activate, :sale_sku, :sale_price)";
         }
         $pdo->prepare($sql_plan)->execute($plan_params);
         if (!$plan_id) {
