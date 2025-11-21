@@ -178,20 +178,21 @@ if (!function_exists('get_member_active_passes')) {
         // [A2 UTC SYNC] 依赖 datetime_helper.php
         $now_utc_str = utc_now()->format('Y-m-d H:i:s');
         
-        // [B1.3] 增加了 pp.name 和简单的双语支持 (如果未来 pass_plans 增加翻译)
+        // [POS-PASS-I18N-NAME-MINI] 增加了 pp.name_zh 和 pp.name_es 字段
         $sql = "
-            SELECT 
-                mp.member_pass_id AS pass_id, 
-                mp.remaining_uses, 
+            SELECT
+                mp.member_pass_id AS pass_id,
+                mp.remaining_uses,
                 mp.expires_at,
                 SUBSTR(mp.member_pass_id, -4) AS pass_last4, /* 临时用 ID 后四位 */
                 pp.name,
+                pp.name_zh,
+                pp.name_es,
                 pp.max_uses_per_order,
                 pp.max_uses_per_day
-                /* TODO: 增加 pp.name_zh, pp.name_es */
             FROM member_passes mp
             JOIN pass_plans pp ON mp.pass_plan_id = pp.pass_plan_id
-            WHERE mp.member_id = ? 
+            WHERE mp.member_id = ?
               AND mp.status = 'active'
               AND mp.remaining_uses > 0
               AND (mp.expires_at IS NULL OR mp.expires_at > ?)
@@ -241,10 +242,10 @@ if (!function_exists('get_member_active_passes')) {
                 $pass['daily_uses_remaining'] = null; //不限
             }
             
-            // [B1.3] 临时双语处理
+            // [POS-PASS-I18N-NAME-MINI] 使用真实的多语言字段
             $pass['name_translation'] = [
-                'zh' => $pass['name'],
-                'es' => $pass['name']
+                'zh' => $pass['name_zh'] ?? $pass['name'],
+                'es' => $pass['name_es'] ?? $pass['name_zh'] ?? $pass['name']
             ];
         }
 
@@ -253,14 +254,17 @@ if (!function_exists('get_member_active_passes')) {
 }
 
 // [B1.4 P4] 新增：获取打印凭条所需的数据
+// [POS-PASS-I18N-NAME-MINI] 增加多语言字段支持
 if (!function_exists('get_pass_print_details')) {
     function get_pass_print_details(PDO $pdo, int $member_pass_id): ?array {
         $sql = "
-            SELECT 
+            SELECT
                 m.phone_number,
                 mp.remaining_uses,
                 mp.expires_at,
-                pp.name AS pass_name
+                pp.name AS pass_name,
+                pp.name_zh AS pass_name_zh,
+                pp.name_es AS pass_name_es
             FROM member_passes mp
             JOIN pos_members m ON mp.member_id = m.id
             JOIN pass_plans pp ON mp.pass_plan_id = pp.pass_plan_id

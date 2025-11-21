@@ -35,6 +35,36 @@ function ensure_active_shift_or_fail(PDO $pdo): int {
     exit;
 }
 
+/**
+ * 计算EOD（日结）或班次交接的总额。
+ *
+ * @deprecated This function is deprecated and should not be used.
+ * @see pos_repo::getInvoiceSummaryForPeriod() for the current implementation
+ *
+ * @param PDO $pdo 数据库连接
+ * @param int $store_id 门店ID
+ * @param string $start_time (UTC) 开始时间 (Y-m-d H:i:s)
+ * @param string $end_time (UTC) 结束时间 (Y-m-d H:i:s)
+ * @return array 包含总额的数组
+ * @throws Exception Always throws exception indicating deprecation
+ */
+function calculate_eod_totals(PDO $pdo, int $store_id, string $start_time, string $end_time): array {
+    // [SECURITY FIX 2025-11-21] 熔断废弃函数，防止引用不存在的 pos_invoice_payments 表
+    // 该函数是旧实现残留，查询了不存在的表，会导致 SQLSTATE[42S02] 错误
+    // 现行 EOD 实现位于：pos_backend/helpers/pos_repo.php::getInvoiceSummaryForPeriod()
+    // 参考技术债文档：ISSUE-POS-DB-001
+
+    throw new Exception(
+        "DEPRECATED: calculate_eod_totals() is a legacy function that references non-existent table 'pos_invoice_payments'. " .
+        "Use pos_repo::getInvoiceSummaryForPeriod() instead. See ISSUE-POS-DB-001 in technical debt documentation."
+    );
+
+    // ============================================================================
+    // 原有实现已删除（~100 行 SQL 逻辑访问不存在的 pos_invoice_payments 表）
+    // 如需查看历史实现，请参考 Git 历史记录
+    // ============================================================================
+}
+
 
 /**
  * [GEMINI FIX 2025-11-16]
