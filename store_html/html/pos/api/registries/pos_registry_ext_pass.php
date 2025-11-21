@@ -91,14 +91,41 @@ if (!function_exists('handle_pass_redeem')) {
         // 5. [B1.4 P2] P2 服务端计价 (依赖: pos_pass_helper.php)
         $alloc = calculate_redeem_allocation($pdo, $cart, $tags_map, $addon_defs, $global_free_addon_limit);
         
-        // 6. 校验支付金额
+        // 6. 校验支付金额和支付方式
         // 依赖: pos_repo.php
-        [, , , $sumPaid, $payment_summary] = extract_payment_totals($payment_raw);
+        [$cash, $card, $platform, $sumPaid, $payment_summary] = extract_payment_totals($payment_raw);
+
+        // 6a. 校验支付金额
         if ($sumPaid < $alloc['extra_total'] - 0.01) {
             json_error('支付金额不足 (Payment amount mismatch)', 422, [
               'required_extra' => $alloc['extra_total'],
               'sum_paid' => $sumPaid,
             ]);
+        }
+
+        // 6b. [B1-PASS-REVIEW-AND-PAYMENT-MINI] 校验支付方式白名单
+        // 仅在有加价场景下执行白名单校验
+        // 设计决策：
+        // - 0 元核销 (extra_total = 0) 不触发此校验，保持现有行为
+        // - 有加价场景 (extra_total > 0) 强制只允许现金/银行卡支付
+        // - 防止前端被篡改，绕过支付方式限制
+        if ($alloc['extra_total'] > 0) {
+            // 白名单：只允许现金 (Cash) 和银行卡 (Card)
+            // $platform 包含所有第三方支付：Bizum, Platform, WeChat, Alipay 等
+            if ($platform > 0.01) {
+                // 发现非白名单支付方式
+                json_error(
+                    '次卡核销加价只能使用现金或银行卡支付 (Pass redemption extra charge can only be paid by Cash or Card)',
+                    400,
+                    [
+                        'extra_charge_total' => $alloc['extra_total'],
+                        'cash_paid' => $cash,
+                        'card_paid' => $card,
+                        'platform_paid' => $platform, // 不允许的支付方式金额
+                        'allowed_methods' => ['Cash', 'Card']
+                    ]
+                );
+            }
         }
 
         $pdo->beginTransaction();
