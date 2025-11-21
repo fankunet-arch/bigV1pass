@@ -29,6 +29,11 @@ L2：POS 线 – 次卡前台闭环（P0~P4）
   - P0~P3：已完成并通过审计。
   - P4：代码与模板已实现，实机打印待验证。
 
+补充 Mini 阶段：POS-CPSYS-PASS-VR-PRICE-MINI
+- 范围：POS + CPSYS（售卡 VR 链路）
+- 目标：审计并修复“次卡售价 From CPSYS 配置 → POS 展示 → VR 落库”的价格一致性问题。
+- 当前状态：审计已完成（Gemini + Jules 报告），修复子阶段待 Claude 执行。
+
 L3：总部 / CPSYS / BMS – 审核与报表
 - 系统范围：总部系统（CPSYS / BMS）
 - 目标：
@@ -113,9 +118,13 @@ P4：打印模板与后台设置
 - POS_EOD_幽灵函数熔断_mini阶段报告_20251121.txt
   - 内容：废弃 calculate_eod_totals，移除对幽灵表 pos_invoice_payments 的访问，保证现行 EOD 链路不受影响。
 
-
-
-
+- POS-CPSYS-PASS-VR-PRICE-MINI_阶段报告_20251121.txt
+  - 内容：次卡售价链路专项审计 + 修复（CPSYS → POS → VR）：
+    - 售价唯一真相字段：pass_plans.sale_price；
+    - 已修复 CPSYS handle_pass_plan_save 漏写 sale_price 问题；
+    - 已提供并验证 fix_pass_plans_sale_price.php 数据回填脚本；
+    - 已在测试环境 + POS 前端实测，确认 CPSYS 配置价 = POS 展示价 = VR 订单金额。  
+  - 当前状态：✅ 审计 + 修复已完成（待生产 Data Patch 最终确认）。
 
 
 示例（占位）：
